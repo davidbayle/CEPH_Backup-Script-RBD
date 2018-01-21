@@ -17,8 +17,11 @@ REPLACE:
 
 
 [DEST-POOLNAME] = Name of you destination Pool
+
 [SOURCE-POOLNAME] = Name of you destination Pool
+
 [SOURCE-HOST] = user @ ip address / hostname of your source server
+
 [DEST-HOST] = user @ ip address / hostname of your destination server
 
 
@@ -27,7 +30,9 @@ For example:
 #!/bin/bash
 
 SOURCEPOOL="vms"
+
 DESTPOOL="vms"
+
 DESTHOST="root@backup.example.com"
 
 
