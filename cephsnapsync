@@ -1,0 +1,121 @@
+#!/bin/bash
+
+SOURCEPOOL="[SOURCE-POOLNAME]"
+DESTPOOL="[DEST-POOLNAME]"
+DESTHOST="[DEST-HOST]"
+
+# Dates section
+
+TODAY=`date +"%Y-%m-%d"`
+YESTERDAY=`date +"%Y-%m-%d" --date="1 days ago"`
+TWODAYSBEFORE=`date +"%Y-%m-%d" --date="2 days ago"`
+NOW=`date`
+
+echo ""
+echo "// == CEPH BACKUP SYNCHRONISATION SCRIPT == //"
+echo ""
+echo "TIME START: " $NOW ;
+echo "==========================================================="
+echo "FROM_POOL PROD: $SOURCEPOOL@[SOURCE-HOST]"
+echo "TO_POOL BACKUP: $DESTPOOL@[DEST-HOST]"
+echo "==========================================================="
+echo ""
+echo "// == CEPH STATUS == //"
+echo ""
+echo "==========================================================="
+echo "CEPH PROD STATS:"
+echo "==========================================================="
+echo ""
+ceph -s
+echo ""
+echo "==========================================================="
+echo ""
+rados df
+echo ""
+echo "==========================================================="
+echo "CEPH BACKUP STATS:"
+echo "==========================================================="
+echo ""
+ssh $DESTHOST ceph -s
+echo ""
+echo "==========================================================="
+echo ""
+ssh $DESTHOST rados df
+echo ""
+echo ""
+echo "==========================================================="
+echo "// == CEPH BACKUP STARTED on pool: $SOURCEPOOL == //"
+echo "==========================================================="
+echo ""
+echo "/*--- SNAPSHOT SYNCHRONISATION ---*/"
+echo ""
+
+
+# List all images in the pool
+
+IMAGES=`rbd ls $SOURCEPOOL`
+
+for LOCAL_IMAGE in $IMAGES; do
+
+        # Check whether remote host/pool has image
+
+        if [[ -z $(ssh $DESTHOST rbd ls $DESTPOOL | grep $LOCAL_IMAGE) ]]; then
+                echo "INFO (step0): image does not exist in remote pool. creating new image"
+
+                # Todo: check succesful creation
+
+                `ssh $DESTHOST rbd create $DESTPOOL/$LOCAL_IMAGE -s 1`
+        fi
+
+        # Create today's snapshot
+
+        if [[ -z $(rbd snap ls $SOURCEPOOL/$LOCAL_IMAGE | grep $TODAY) ]]; then
+                echo "INFO (step1): creating snapshot $SOURCEPOOL/$LOCAL_IMAGE@$TODAY"
+                `rbd snap create $SOURCEPOOL/$LOCAL_IMAGE@$TODAY`
+        else
+                echo "WARNING: source image $SOURCEPOOL/$LOCAL_IMAGE@$TODAY already exists"
+        fi
+
+        # Check whether to do a init or a full
+
+        if [[ -z $(ssh $DESTHOST rbd snap ls $DESTPOOL/$LOCAL_IMAGE) ]]; then
+                echo "INFO (step2): no snapshots found for $DESTPOOL/$LOCAL_IMAGE doing init"
+                `rbd export-diff $SOURCEPOOL/$LOCAL_IMAGE@$TODAY - | ssh $DESTHOST rbd import-diff - $DESTPOOL/$LOCAL_IMAGE`
+        else
+                echo "INFO (step2): found previous snapshots for this rbd volume, doing diff"
+
+                # Check yesterday's snapshot exists at remote pool
+
+                if [[ -z $(ssh $DESTHOST rbd snap ls $DESTPOOL/$LOCAL_IMAGE | grep $YESTERDAY) ]]; then
+                                echo "ERROR: --from-snap $LOCAL_IMAGE@$YESTERDAY does not exist on remote pool"
+                fi
+                # Check todays's snapshot already exists at remote pool
+
+                if [[ -z $(ssh $DESTHOST rbd snap ls $DESTPOOL/$LOCAL_IMAGE | grep $TODAY) ]]; then
+
+                        # Do the snap diff export|import betweeb SourcePool and DestPool
+                                `rbd export-diff --from-snap $YESTERDAY $SOURCEPOOL/$LOCAL_IMAGE@$TODAY - | ssh $DESTHOST rbd import-diff - $DESTPOOL/$LOCAL_IMAGE` > /dev/null 2>&1
+                                echo "INFO (step3): Export diff done OK !"
+                        # Erase two_days_before's snapshot on SourcePool
+                                 `rbd -p $SOURCEPOOL snap rm $LOCAL_IMAGE@$TWODAYSBEFORE` > /dev/null 2>&1
+                                echo "INFO (step4): deleting 2days old snapshot on SourcePool $SOURCEPOOL/$LOCAL_IMAGE@$TWODAYSBEFORE"
+                                 `ssh $DESTHOST rbd -p $DESTPOOL snap rm $LOCAL_IMAGE@$TWODAYSBEFORE` > /dev/null 2>&1
+                                echo "INFO (step5): deleting 2days old snapshot on DestPool $DESTPOOL/$LOCAL_IMAGE@$TWODAYSBEFORE"
+
+                else
+                                echo "ERROR: snapshot $DESTPOOL/$LOCAL_IMAGE@$TODAY already exists, skipping"
+                fi
+        fi
+echo ""
+done
+
+
+echo ""
+echo ""
+echo "========================================================================================="
+echo "// == CEPH BACKUP ENDED FOR POOL PROD: $SOURCEPOOL@[SOURCE-HOST] == //"
+echo "========================================================================================="
+echo ""
+NOWEND=`date`
+echo "TIME END:" $NOWEND ;
+echo ""
